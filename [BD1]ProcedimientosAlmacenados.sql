@@ -5,6 +5,8 @@ DROP PROCEDURE IF EXISTS AddDefuncion;
 DROP PROCEDURE IF EXISTS getDefuncion;
 DROP PROCEDURE IF EXISTS generarDPI;
 DROP PROCEDURE IF EXISTS getDPI;
+DROP PROCEDURE IF EXISTS AddMatrimonio;
+DROP PROCEDURE IF EXISTS getMatrimonio;
 
 DROP FUNCTION IF EXISTS getFullName;
 DROP FUNCTION IF EXISTS getLastName;
@@ -156,9 +158,9 @@ delimiter ;
 
 delimiter //
 CREATE PROCEDURE AddDefuncion(
-	cui INT,
-	fecha VARCHAR(15),
-    motivo VARCHAR(100)
+	IN cui INT,
+	IN fecha VARCHAR(15),
+    IN motivo VARCHAR(100)
 )
 	proc_exit:BEGIN
 		DECLARE ffecha DATE;
@@ -181,7 +183,7 @@ delimiter ;
 
 delimiter //
 CREATE PROCEDURE getDefuncion(
-	cui INT
+	IN cui INT
 )
 	proc_exit:BEGIN
 		IF cui NOT IN (SELECT cui from defuncion) THEN
@@ -209,9 +211,9 @@ delimiter ;
 
 delimiter //
 CREATE PROCEDURE generarDPI (
-	cui INT,
-    fecha VARCHAR(15),
-    municipio INT
+	IN cui INT,
+    IN fecha VARCHAR(15),
+    IN municipio INT
 )
 	proc_exit:BEGIN
 		DECLARE ffecha DATE;
@@ -235,12 +237,13 @@ CREATE PROCEDURE generarDPI (
         END IF;
         INSERT INTO dpi (fecha, municipio, departamento, cui, estado)
         VALUES (ffecha, no_mun, no_dep, cui, 'SOLTERO');
+        SELECT * FROM dpi WHERE dpi.cui = cui;
     END //
 delimiter ;
 
 delimiter //
 CREATE PROCEDURE getDPI (
-	cui INT
+	IN cui INT
 )
 	proc_exit:BEGIN
 	IF cui NOT IN (SELECT dpi.cui FROM dpi) THEN
@@ -269,12 +272,88 @@ CREATE PROCEDURE getDPI (
     END //
 delimiter ;
 
-/*
-CALL AddNacimiento(10101, 10102, 'Kenneth', 'Haroldo', NULL, '21-09-2000', 0101, 'M');
+delimiter //
+CREATE PROCEDURE AddMatrimonio(
+	IN novio INT,
+    IN novia INT,
+    IN fecha VARCHAR(15)
+) 
+	proc_exit:BEGIN
+		DECLARE ffecha DATE;
+        DECLARE novio_ant INT;
+        DECLARE novia_ant INT;
+        DECLARE div_novio DATE;
+        DECLARE div_novia DATE;
+        SET novio_ant = (SELECT m.no_acta FROM matrimonio m WHERE m.novio = novio ORDER BY fecha DESC LIMIT 1);
+        SET novia_ant = (SELECT m.no_acta FROM matrimonio m WHERE m.novia = novia ORDER BY fecha DESC LIMIT 1);
+        SET ffecha = STR_TO_DATE(fecha, '%d-%m-%Y');
+        IF novio = novia THEN
+			CALL ShowError('Se debe proporcionar DPI diferentes');
+            LEAVE proc_exit;
+        ELSEIF novio NOT IN (SELECT cui FROM dpi) THEN
+			CALL ShowError('No se encontró DPI 1');
+            LEAVE proc_exit;
+		ELSEIF novia NOT IN (SELECT cui FROM dpi) THEN
+			CALL ShowError('No se encontró DPI 2');
+            LEAVE proc_exit;
+		ELSEIF 'M' <> (SELECT genero FROM persona WHERE cui = novio LIMIT 1) THEN
+			CALL ShowError('DPI 1 debe pertenecer a un hombre');
+            LEAVE proc_exit;
+		ELSEIF 'F' <> (SELECT genero FROM persona WHERE cui = novia LIMIT 1) THEN
+			CALL ShowError('DPI 2 debe pertenecer a una mujer');
+            LEAVE proc_exit;
+		ELSEIF novio_ant IS NOT NULL THEN
+			SET div_novio = (SELECT fecha FROM divorcio WHERE matrimonio = novio_ant LIMIT 1); 
+			IF div_novio IS NULL OR div_novio > ffecha THEN
+				CALL ShowError('DPI 1 cuenta con un matrimonio vigente');
+                LEAVE proc_exit;
+            END IF;
+		ELSEIF novia_ant IS NOT NULL THEN
+			SET div_novia = (SELECT fecha FROM divorcio WHERE matrimonio = novia_ant LIMIT 1); 
+			IF div_novia IS NULL OR div_novia > ffecha THEN
+				CALL ShowError('DPI 2 cuenta con un matrimonio vigente');
+                LEAVE proc_exit;
+            END IF;
+        END IF;
+		INSERT INTO matrimonio (fecha, novio, novia)
+        VALUES (ffecha, novio, novia);
+        UPDATE DPI SET estado = 'CASADO' WHERE cui IN (novio, novia);
+        SELECT * FROM matrimonio m WHERE m.novio = novio ORDER BY no_acta DESC LIMIT 1;
+    END //
+delimiter ;
+
+delimiter //
+CREATE PROCEDURE getMatrimonio(
+	IN acta INT
+)
+	proc_exit:BEGIN
+		IF acta NOT IN (SELECT no_acta FROM matrimonio) THEN
+			CALL ShowError('Acta de matrimonio no encontrada');
+            LEAVE proc_exit;
+        END IF;
+        SELECT 
+			m.no_acta AS 'No. Matrimonio',
+            m.novio AS 'DPI Hombre',
+            getFullName(m.novio) AS 'Nombre Hombre',
+            m.novia AS 'DPI Mujer',
+            getFullName(m.novia) AS 'Nombre Mujer',
+            DATE_FORMAT(m.fecha, '%d-%m-%Y') AS Fecha
+		FROM matrimonio m
+        WHERE no_acta = acta
+        ;
+    END //
+delimiter ;
+
+/*CALL AddNacimiento(10101, 10102, 'Kenneth', 'Haroldo', NULL, '21-09-2000', 0101, 'M');
 CALL AddNacimiento(10101, 10102, 'Cynthia', 'María', NULL, '17-02-2006', 0101, 'F');
 CALL getNacimiento(20101);
-CALL addDefuncion(30101, '28-06-2048', 'Paro cardíaco');
+CALL AddDefuncion(40101, '28-06-2048', 'Paro cardíaco');
 CALL getDefuncion(30101);
 CALL generarDPI(20101, '02-05-2022', 0102);
+CALL generarDPI(10101, '02-05-2022', 0102);
+CALL generarDPI(10102, '02-05-2022', 0102);
+CALL generarDPI(30101, '02-05-2022', 0102);
+CALL generarDPI(40101, '02-05-2022', 0102);
 CALL getDPI(20101);
-*/
+CALL AddMatrimonio(10101, 10102, '02-11-1998');
+CALL getMatrimonio(1); */

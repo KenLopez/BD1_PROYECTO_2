@@ -7,7 +7,8 @@ INSERT INTO PERSONA (
     apellido_2,
     genero
 ) VALUES (10101,'Rafael','Haroldo',NULL,'López','García','M'),
-    (10102,'Gilmery','Adalia',NULL,'López','Carías','F')
+    (10102,'Gilmery','Adalia',NULL,'López','Carías','F'),
+    (20101,'Katherine','Andrea','Sofía','González','Pérez','F')
 ;
 
 INSERT INTO NACIMIENTO (
@@ -18,7 +19,6 @@ INSERT INTO NACIMIENTO (
     municipio,
     departamento
 ) VALUES ('1974-02-16', 10101, NULL, NULL, 1, 1),
-('1973-11-03', 10102, NULL, NULL, 2, 1)
+	('1973-11-03', 10102, NULL, NULL, 2, 1),
+	('2001-08-24', 40101, NULL, NULL, 1, 1)
 ;
-
-UPDATE NACIMIENTO SET fecha = '1974-02-16' WHERE cui = 10101;
