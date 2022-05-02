@@ -3,6 +3,8 @@ DROP PROCEDURE IF EXISTS ShowError;
 DROP PROCEDURE IF EXISTS getNacimiento;
 DROP PROCEDURE IF EXISTS AddDefuncion;
 DROP PROCEDURE IF EXISTS getDefuncion;
+DROP PROCEDURE IF EXISTS generarDPI;
+DROP PROCEDURE IF EXISTS getDPI;
 
 DROP FUNCTION IF EXISTS getFullName;
 DROP FUNCTION IF EXISTS getLastName;
@@ -200,12 +202,79 @@ CREATE PROCEDURE getDefuncion(
         INNER JOIN nacimiento n ON n.cui = d.cui 
         INNER JOIN municipio m ON m.codigo = n.municipio AND m.departamento = n.departamento
         INNER JOIN departamento dep ON dep.codigo = m.departamento
+        WHERE d.cui = cui
         ;
     END //
 delimiter ;
 
+delimiter //
+CREATE PROCEDURE generarDPI (
+	cui INT,
+    fecha VARCHAR(15),
+    municipio INT
+)
+	proc_exit:BEGIN
+		DECLARE ffecha DATE;
+        DECLARE no_mun INT;
+        DECLARE no_dep INT;
+        SET ffecha = STR_TO_DATE(fecha, '%d-%m-%Y');
+        SET no_mun = MOD(municipio, 100);
+        SET no_dep = municipio DIV 100;
+        IF cui NOT IN (SELECT cui FROM persona) THEN
+			CALL ShowError('CUI no encontrado');
+            LEAVE proc_exit;
+		ELSEIF cui IN (SELECT dpi.cui FROM dpi) THEN
+			CALL ShowError('DPI ya fue generado previamente');
+			LEAVE proc_exit;
+		ELSEIF NOT EXISTS (SELECT codigo FROM municipio WHERE codigo = no_mun AND departamento = no_dep) THEN
+			CALL ShowError('Municipio no válido');
+            LEAVE proc_exit;
+		ELSEIF getAge(cui) < 18 THEN
+			CALL ShowError('Edad no apta para generar DPI');
+            LEAVE proc_exit;
+        END IF;
+        INSERT INTO dpi (fecha, municipio, departamento, cui, estado)
+        VALUES (ffecha, no_mun, no_dep, cui, 'SOLTERO');
+    END //
+delimiter ;
+
+delimiter //
+CREATE PROCEDURE getDPI (
+	cui INT
+)
+	proc_exit:BEGIN
+	IF cui NOT IN (SELECT dpi.cui FROM dpi) THEN
+		CALL ShowError('CUI no encontrado');
+		LEAVE proc_exit;
+	END IF;
+    SELECT
+		dpi.cui AS CUI,
+        getLastName(dpi.cui) AS Apellidos,
+        getName(dpi.cui) AS Nombres,
+        DATE_FORMAT(n.fecha, '%d-%m-%Y') AS 'Fecha Nacimiento',
+        dep.nombre AS 'Departamento Nacimiento',
+        m.nombre AS 'Municipio Nacimiento',
+        depv.nombre AS 'Departamento Vecindad',
+        mv.nombre AS 'Municipio Vecindad',
+        p.genero AS 'Género'
+    FROM dpi
+    INNER JOIN persona p ON p.cui = dpi.cui
+    INNER JOIN nacimiento n ON n.cui = dpi.cui
+    INNER JOIN municipio m ON m.codigo = n.municipio AND m.departamento = n.departamento
+	INNER JOIN departamento dep ON dep.codigo = m.departamento
+    INNER JOIN municipio mv ON mv.codigo = dpi.municipio AND mv.departamento = dpi.departamento
+	INNER JOIN departamento depv ON depv.codigo = mv.departamento
+    WHERE cui = dpi.cui
+    ;
+    END //
+delimiter ;
+
+/*
 CALL AddNacimiento(10101, 10102, 'Kenneth', 'Haroldo', NULL, '21-09-2000', 0101, 'M');
 CALL AddNacimiento(10101, 10102, 'Cynthia', 'María', NULL, '17-02-2006', 0101, 'F');
 CALL getNacimiento(20101);
 CALL addDefuncion(30101, '28-06-2048', 'Paro cardíaco');
 CALL getDefuncion(30101);
+CALL generarDPI(20101, '02-05-2022', 0102);
+CALL getDPI(20101);
+*/
