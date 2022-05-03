@@ -9,6 +9,8 @@ DROP PROCEDURE IF EXISTS AddMatrimonio;
 DROP PROCEDURE IF EXISTS getMatrimonio;
 DROP PROCEDURE IF EXISTS AddDivorcio;
 DROP PROCEDURE IF EXISTS getDivorcio;
+DROP PROCEDURE IF EXISTS AddLicencia;
+DROP PROCEDURE IF EXISTS getLicencias;
 
 DROP FUNCTION IF EXISTS getFullName;
 DROP FUNCTION IF EXISTS getLastName;
@@ -390,7 +392,60 @@ CREATE PROCEDURE getDivorcio(
         WHERE d.no_acta = acta
         ;
     END //
+delimiter ;
 
+delimiter //
+CREATE PROCEDURE AddLicencia(
+	IN cui INT,
+    IN fecha VARCHAR(15),
+    IN tipo CHAR(1)
+)
+	proc_exit:BEGIN
+		DECLARE ffecha DATE;
+        SET ffecha = STR_TO_DATE(fecha, '%d-%m-%Y');
+		IF tipo NOT IN ('E','C','M') THEN
+			CALL ShowError('Tipo no válido para primera licencia');
+            LEAVE proc_exit;
+		ELSEIF cui NOT IN (SELECT cui FROM persona) THEN
+			CALL ShowError('CUI no encontrado');
+            LEAVE proc_exit;
+		ELSEIF getAge(cui) < 16 THEN
+			CALL ShowError('Edad insuficiente para solicitar licencia');
+            LEAVE proc_exit;
+		ELSEIF tipo IN ('C','M') AND EXISTS (SELECT numero FROM licencia l WHERE TIPO <> 'E' AND l.cui = cui) THEN
+			CALL ShowError('Ya se emitió una licencia con este CUI');
+            LEAVE proc_exit;
+		ELSEIF tipo = 'E' AND EXISTS (SELECT numero FROM licencia l WHERE l.tipo = 'E' AND l.cui = cui) THEN
+			CALL ShowError('Ya se emitió una licencia tipo E con este CUI');
+            LEAVE proc_exit;
+        END IF;
+        INSERT INTO licencia (fecha, vencimiento, cui, tipo) 
+        VALUES (ffecha, DATE_ADD(ffecha, INTERVAL 1 YEAR), cui, tipo);
+        SELECT * FROM licencia l WHERE l.cui = cui AND l.tipo = tipo;
+    END //
+delimiter ;
+
+delimiter //
+CREATE PROCEDURE getLicencias(
+	IN cui INT
+)
+	proc_exit:BEGIN
+		IF cui NOT IN (SELECT cui FROM PERSONA) THEN
+			CALL ShowError('CUI no encontrado');
+            LEAVE proc_exit;
+        END IF;
+        SELECT 
+			l.numero AS 'No. Licencia',
+            getName(cui) AS Nombres,
+            getLastName(cui) AS Apellidos,
+            DATE_FORMAT(l.fecha, '%d-%m-%Y') AS 'Fecha Emisión',
+            DATE_FORMAT(l.vencimiento, '%d-%m-%Y') AS 'Fecha Vencimiento',
+            tipo AS Tipo
+		FROM licencia l
+		INNER JOIN persona p ON p.cui = l.cui
+        WHERE l.cui = cui
+        ;
+    END //
 delimiter ;
 
 #CALL AddNacimiento(10101, 10102, 'Kenneth', 'Haroldo', NULL, '21-09-2000', 0101, 'M');
@@ -408,4 +463,6 @@ delimiter ;
 #CALL AddMatrimonio(10101, 10102, '18-12-1998');
 #CALL getMatrimonio(1);
 #CALL AddDivorcio(1, '01-03-2100');
-#CALL getDivorcio(4);
+#CALL getDivorcio(1);
+#CALL AddLicencia(30101, '02-05-2022', 'E');
+CALL getLicencias(30101);
