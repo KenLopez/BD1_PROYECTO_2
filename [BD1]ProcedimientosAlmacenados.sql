@@ -7,6 +7,8 @@ DROP PROCEDURE IF EXISTS generarDPI;
 DROP PROCEDURE IF EXISTS getDPI;
 DROP PROCEDURE IF EXISTS AddMatrimonio;
 DROP PROCEDURE IF EXISTS getMatrimonio;
+DROP PROCEDURE IF EXISTS AddDivorcio;
+DROP PROCEDURE IF EXISTS getDivorcio;
 
 DROP FUNCTION IF EXISTS getFullName;
 DROP FUNCTION IF EXISTS getLastName;
@@ -175,6 +177,13 @@ CREATE PROCEDURE AddDefuncion(
 			CALL ShowError('Fecha de defunción anterior a fecha de nacimiento');
             LEAVE proc_exit;
 		END IF;
+        IF cui IN (SELECT cui FROM dpi) AND (SELECT estado FROM dpi WHERE dpi.cui = cui) = 'CASADO' THEN
+			IF (SELECT p.genero FROM persona p WHERE p.cui = cui LIMIT 1) = 'M' THEN
+				UPDATE dpi SET estado = 'VIUDO' WHERE dpi.cui = (SELECT novia FROM matrimonio m WHERE novio = cui ORDER BY m.fecha DESC LIMIT 1);
+			ELSEIF (SELECT p.genero FROM persona p WHERE p.cui = cui LIMIT 1) = 'F' THEN
+				UPDATE dpi SET estado = 'VIUDO' WHERE dpi.cui = (SELECT novio FROM matrimonio m WHERE novia = cui ORDER BY m.fecha DESC LIMIT 1);
+            END IF;
+        END IF;
         INSERT INTO defuncion (fecha, motivo, cui)
         VALUES (ffecha, motivo, cui);
         SELECT * FROM defuncion d WHERE d.cui = cui; 
@@ -195,6 +204,7 @@ CREATE PROCEDURE getDefuncion(
             d.cui AS CUI,
             getLastName(d.cui) AS Apellidos,
             getName(d.cui) AS Nombres,
+            DATE_FORMAT(n.fecha, '%d-%m-%Y') AS 'Fecha Nacimiento',
             DATE_FORMAT(d.fecha, '%d-%m-%Y') AS 'Fecha Fallecimiento',
             dep.nombre AS 'Departamento Nacimiento',
             m.nombre AS 'Municipio Nacimiento',
@@ -259,7 +269,8 @@ CREATE PROCEDURE getDPI (
         m.nombre AS 'Municipio Nacimiento',
         depv.nombre AS 'Departamento Vecindad',
         mv.nombre AS 'Municipio Vecindad',
-        p.genero AS 'Género'
+        p.genero AS 'Género',
+        dpi.estado AS 'Estado Civil'
     FROM dpi
     INNER JOIN persona p ON p.cui = dpi.cui
     INNER JOIN nacimiento n ON n.cui = dpi.cui
@@ -280,12 +291,6 @@ CREATE PROCEDURE AddMatrimonio(
 ) 
 	proc_exit:BEGIN
 		DECLARE ffecha DATE;
-        DECLARE novio_ant INT;
-        DECLARE novia_ant INT;
-        DECLARE div_novio DATE;
-        DECLARE div_novia DATE;
-        SET novio_ant = (SELECT m.no_acta FROM matrimonio m WHERE m.novio = novio ORDER BY fecha DESC LIMIT 1);
-        SET novia_ant = (SELECT m.no_acta FROM matrimonio m WHERE m.novia = novia ORDER BY fecha DESC LIMIT 1);
         SET ffecha = STR_TO_DATE(fecha, '%d-%m-%Y');
         IF novio = novia THEN
 			CALL ShowError('Se debe proporcionar DPI diferentes');
@@ -302,18 +307,12 @@ CREATE PROCEDURE AddMatrimonio(
 		ELSEIF 'F' <> (SELECT genero FROM persona WHERE cui = novia LIMIT 1) THEN
 			CALL ShowError('DPI 2 debe pertenecer a una mujer');
             LEAVE proc_exit;
-		ELSEIF novio_ant IS NOT NULL THEN
-			SET div_novio = (SELECT fecha FROM divorcio WHERE matrimonio = novio_ant LIMIT 1); 
-			IF div_novio IS NULL OR div_novio > ffecha THEN
-				CALL ShowError('DPI 1 cuenta con un matrimonio vigente');
-                LEAVE proc_exit;
-            END IF;
-		ELSEIF novia_ant IS NOT NULL THEN
-			SET div_novia = (SELECT fecha FROM divorcio WHERE matrimonio = novia_ant LIMIT 1); 
-			IF div_novia IS NULL OR div_novia > ffecha THEN
-				CALL ShowError('DPI 2 cuenta con un matrimonio vigente');
-                LEAVE proc_exit;
-            END IF;
+		ELSEIF (SELECT estado FROM dpi WHERE cui = novio LIMIT 1) = 'CASADO' THEN
+			CALL ShowError('DPI 1 cuenta con un matrimonio vigente');
+            LEAVE proc_exit;
+		ELSEIF (SELECT estado FROM dpi WHERE cui = novia LIMIT 1) = 'CASADO' THEN
+			CALL ShowError('DPI 2 cuenta con un matrimonio vigente');
+            LEAVE proc_exit;
         END IF;
 		INSERT INTO matrimonio (fecha, novio, novia)
         VALUES (ffecha, novio, novia);
@@ -344,16 +343,69 @@ CREATE PROCEDURE getMatrimonio(
     END //
 delimiter ;
 
-/*CALL AddNacimiento(10101, 10102, 'Kenneth', 'Haroldo', NULL, '21-09-2000', 0101, 'M');
-CALL AddNacimiento(10101, 10102, 'Cynthia', 'María', NULL, '17-02-2006', 0101, 'F');
-CALL getNacimiento(20101);
-CALL AddDefuncion(40101, '28-06-2048', 'Paro cardíaco');
-CALL getDefuncion(30101);
-CALL generarDPI(20101, '02-05-2022', 0102);
-CALL generarDPI(10101, '02-05-2022', 0102);
-CALL generarDPI(10102, '02-05-2022', 0102);
-CALL generarDPI(30101, '02-05-2022', 0102);
-CALL generarDPI(40101, '02-05-2022', 0102);
-CALL getDPI(20101);
-CALL AddMatrimonio(10101, 10102, '02-11-1998');
-CALL getMatrimonio(1); */
+delimiter //
+CREATE PROCEDURE AddDivorcio (
+	IN acta INT,
+    IN fecha VARCHAR(15)
+)
+	proc_exit:BEGIN
+		DECLARE ffecha DATE;
+        SET ffecha = STR_TO_DATE(fecha, '%d-%m-%Y');
+        IF acta NOT IN (SELECT no_acta FROM matrimonio) THEN
+			CALL ShowError('Acta de matrimonio no existe');
+            LEAVE proc_exit;
+		ELSEIF acta IN (SELECT matrimonio FROM divorcio) THEN
+			CALL ShowError('Matrimonio no se encuentra vigente');
+            LEAVE proc_exit;
+		ELSEIF ffecha < (SELECT fecha FROM matrimonio WHERE no_acta = acta LIMIT 1) THEN
+			CALL ShowError('Fecha de divorcio no es posterior a fecha de matrimonio');
+            LEAVE proc_exit;
+        END IF;
+        INSERT INTO divorcio (fecha, matrimonio)
+        VALUES (ffecha, acta);
+        UPDATE dpi SET estado = 'DIVORCIADO' WHERE cui = (SELECT novio FROM matrimonio WHERE no_acta = acta LIMIT 1);
+        UPDATE dpi SET estado = 'DIVORCIADO' WHERE cui = (SELECT novia FROM matrimonio WHERE no_acta = acta LIMIT 1);
+        SELECT * FROM divorcio WHERE matrimonio = acta;
+    END //
+delimiter ;
+
+delimiter //
+CREATE PROCEDURE getDivorcio(
+	acta INT
+)
+	proc_exit:BEGIN
+		IF NOT EXISTS (SELECT no_acta FROM divorcio WHERE no_acta = acta) THEN
+			CALL ShowError('Acta de divorcio no encontrada');
+            LEAVE proc_exit;
+        END IF;
+        SELECT 
+			d.no_acta AS 'No. Divorcio',
+            m.novio AS 'DPI Hombre',
+            getFullName(m.novio) AS 'Nombre Hombre',
+            m.novia AS 'DPI Mujer',
+            getFullName(m.novia) AS 'Nombre Mujer',
+            DATE_FORMAT(d.fecha, '%d-%m-%Y') AS 'Fecha'
+		FROM divorcio d
+        INNER JOIN matrimonio m ON d.matrimonio = m.no_acta
+        WHERE d.no_acta = acta
+        ;
+    END //
+
+delimiter ;
+
+#CALL AddNacimiento(10101, 10102, 'Kenneth', 'Haroldo', NULL, '21-09-2000', 0101, 'M');
+#CALL AddNacimiento(10101, 10102, 'Cynthia', 'María', NULL, '17-02-2006', 0101, 'F');
+#CALL getNacimiento(20101);
+#CALL AddDefuncion(40101, '28-06-2048', 'Paro cardíaco');
+#CALL AddDefuncion(10101, '13-11-2128', 'Paro cardíaco');
+#CALL getDefuncion(40101);
+#CALL generarDPI(20101, '02-05-2022', 0102);
+#CALL generarDPI(10101, '02-05-2022', 0102);
+#CALL generarDPI(10102, '02-05-2022', 0102);
+#CALL generarDPI(30101, '02-05-2022', 0102);
+#CALL generarDPI(40101, '02-05-2022', 0102);
+#CALL getDPI(10102);
+#CALL AddMatrimonio(10101, 10102, '18-12-1998');
+#CALL getMatrimonio(1);
+#CALL AddDivorcio(1, '01-03-2100');
+#CALL getDivorcio(4);
