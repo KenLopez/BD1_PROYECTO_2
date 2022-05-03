@@ -11,6 +11,8 @@ DROP PROCEDURE IF EXISTS AddDivorcio;
 DROP PROCEDURE IF EXISTS getDivorcio;
 DROP PROCEDURE IF EXISTS AddLicencia;
 DROP PROCEDURE IF EXISTS getLicencias;
+DROP PROCEDURE IF EXISTS anularLicencia;
+DROP PROCEDURE IF EXISTS renewLicencia;
 
 DROP FUNCTION IF EXISTS getFullName;
 DROP FUNCTION IF EXISTS getLastName;
@@ -18,7 +20,6 @@ DROP FUNCTION IF EXISTS getName;
 DROP FUNCTION IF EXISTS onlyLetters;
 DROP FUNCTION IF EXISTS getAge;
 DROP FUNCTION IF EXISTS generateCUI;
-
 
 CREATE FUNCTION getFullName(solicitado INT)
 RETURNS VARCHAR(120) DETERMINISTIC
@@ -47,12 +48,12 @@ RETURNS INT DETERMINISTIC
 delimiter ;
 
 delimiter //
-CREATE FUNCTION getAge(solicitado INT)
+CREATE FUNCTION getAge(solicitado INT, actual DATE)
 RETURNS INT DETERMINISTIC
 	BEGIN
 		DECLARE nac DATE;
         SET nac = (SELECT fecha FROM nacimiento WHERE cui = solicitado LIMIT 1);
-        RETURN YEAR(now()) - YEAR(nac) - (DATE_FORMAT(now(), '%m%d') < DATE_FORMAT(nac, '%m%d'));
+        RETURN YEAR(actual) - YEAR(nac) - (DATE_FORMAT(actual, '%m%d') < DATE_FORMAT(nac, '%m%d'));
     END //
 delimiter ;
 
@@ -79,7 +80,9 @@ CREATE PROCEDURE AddNacimiento (
         DECLARE no_dep INT;
         DECLARE apellido1 VARCHAR(25);
         DECLARE apellido2 VARCHAR(25);
+        DECLARE ffecha DATE;
         DECLARE n_cui INT;
+        SET ffecha = STR_TO_DATE(fecha, '%d-%m-%Y');
         SET no_mun = MOD(municipio, 100);
         SET no_dep = municipio DIV 100;
 		IF nombre1 IS NULL THEN
@@ -97,13 +100,13 @@ CREATE PROCEDURE AddNacimiento (
 		ELSEIF padre IS NULL OR padre NOT IN (SELECT cui FROM persona) THEN
 			CALL ShowError('CUI de padre no encontrado');
             LEAVE proc_exit;
-		ELSEIF getAge(padre) < 18 THEN
+		ELSEIF getAge(padre, ffecha) < 18 THEN
 			CALL ShowError('Padre no puede ser menor de edad');
             LEAVE proc_exit;
 		ELSEIF madre IS NULL OR madre NOT IN (SELECT cui FROM persona) THEN
 			CALL ShowError('CUI de madre no encontrado');
             LEAVE proc_exit;
-		ELSEIF getAge(madre) < 18 THEN
+		ELSEIF getAge(madre, ffecha) < 18 THEN
 			CALL ShowError('Madre no puede ser menor de edad');
             LEAVE proc_exit;
 		ELSEIF NOT EXISTS (SELECT codigo FROM municipio WHERE codigo = no_mun AND departamento = no_dep) THEN
@@ -119,7 +122,7 @@ CREATE PROCEDURE AddNacimiento (
         INSERT INTO PERSONA (cui, nombre_1, nombre_2, nombre_3, apellido_1, apellido_2, genero) 
         VALUES (n_cui, nombre1, nombre2, nombre3, apellido1, apellido2, genero);
         INSERT INTO NACIMIENTO (fecha, cui, padre, madre, municipio, departamento)
-        VALUES (STR_TO_DATE(fecha, '%d-%m-%Y'), n_cui, padre, madre, no_mun, no_dep);
+        VALUES (ffecha, n_cui, padre, madre, no_mun, no_dep);
         SELECT * FROM persona WHERE cui = n_cui;
     END //
 delimiter ;
@@ -243,7 +246,7 @@ CREATE PROCEDURE generarDPI (
 		ELSEIF NOT EXISTS (SELECT codigo FROM municipio WHERE codigo = no_mun AND departamento = no_dep) THEN
 			CALL ShowError('Municipio no válido');
             LEAVE proc_exit;
-		ELSEIF getAge(cui) < 18 THEN
+		ELSEIF getAge(cui, ffecha) < 18 THEN
 			CALL ShowError('Edad no apta para generar DPI');
             LEAVE proc_exit;
         END IF;
@@ -302,6 +305,12 @@ CREATE PROCEDURE AddMatrimonio(
             LEAVE proc_exit;
 		ELSEIF novia NOT IN (SELECT cui FROM dpi) THEN
 			CALL ShowError('No se encontró DPI 2');
+            LEAVE proc_exit;
+		ELSEIF getAge(novio, ffecha) < 18 THEN
+			CALL ShowError('DPI 1 debe ser mayor de 18 años al momento de casarse');
+            LEAVE proc_exit;
+		ELSEIF getAge(novia, ffecha) < 18 THEN
+			CALL ShowError('DPI 2 debe ser mayor de 18 años al momento de casarse');
             LEAVE proc_exit;
 		ELSEIF 'M' <> (SELECT genero FROM persona WHERE cui = novio LIMIT 1) THEN
 			CALL ShowError('DPI 1 debe pertenecer a un hombre');
@@ -409,10 +418,10 @@ CREATE PROCEDURE AddLicencia(
 		ELSEIF cui NOT IN (SELECT cui FROM persona) THEN
 			CALL ShowError('CUI no encontrado');
             LEAVE proc_exit;
-		ELSEIF getAge(cui) < 16 THEN
+		ELSEIF getAge(cui, ffecha) < 16 THEN
 			CALL ShowError('Edad insuficiente para solicitar licencia');
             LEAVE proc_exit;
-		ELSEIF tipo IN ('C','M') AND EXISTS (SELECT numero FROM licencia l WHERE TIPO <> 'E' AND l.cui = cui) THEN
+		ELSEIF tipo IN ('C','M') AND EXISTS (SELECT numero FROM licencia l WHERE l.tipo <> 'E' AND l.cui = cui) THEN
 			CALL ShowError('Ya se emitió una licencia con este CUI');
             LEAVE proc_exit;
 		ELSEIF tipo = 'E' AND EXISTS (SELECT numero FROM licencia l WHERE l.tipo = 'E' AND l.cui = cui) THEN
@@ -440,7 +449,7 @@ CREATE PROCEDURE getLicencias(
             getLastName(cui) AS Apellidos,
             DATE_FORMAT(l.fecha, '%d-%m-%Y') AS 'Fecha Emisión',
             DATE_FORMAT(l.vencimiento, '%d-%m-%Y') AS 'Fecha Vencimiento',
-            tipo AS Tipo
+            l.tipo AS Tipo
 		FROM licencia l
 		INNER JOIN persona p ON p.cui = l.cui
         WHERE l.cui = cui
@@ -448,21 +457,60 @@ CREATE PROCEDURE getLicencias(
     END //
 delimiter ;
 
-#CALL AddNacimiento(10101, 10102, 'Kenneth', 'Haroldo', NULL, '21-09-2000', 0101, 'M');
-#CALL AddNacimiento(10101, 10102, 'Cynthia', 'María', NULL, '17-02-2006', 0101, 'F');
-#CALL getNacimiento(20101);
-#CALL AddDefuncion(40101, '28-06-2048', 'Paro cardíaco');
-#CALL AddDefuncion(10101, '13-11-2128', 'Paro cardíaco');
-#CALL getDefuncion(40101);
-#CALL generarDPI(20101, '02-05-2022', 0102);
-#CALL generarDPI(10101, '02-05-2022', 0102);
-#CALL generarDPI(10102, '02-05-2022', 0102);
-#CALL generarDPI(30101, '02-05-2022', 0102);
-#CALL generarDPI(40101, '02-05-2022', 0102);
-#CALL getDPI(10102);
-#CALL AddMatrimonio(10101, 10102, '18-12-1998');
-#CALL getMatrimonio(1);
-#CALL AddDivorcio(1, '01-03-2100');
-#CALL getDivorcio(1);
-#CALL AddLicencia(30101, '02-05-2022', 'E');
-CALL getLicencias(30101);
+delimiter //
+CREATE PROCEDURE anularLicencia(
+	IN licencia INT,
+    IN fecha VARCHAR(15),
+    IN motivo VARCHAR(200)
+)
+	proc_exit:BEGIN
+		DECLARE ffecha DATE;
+        SET ffecha = STR_TO_DATE(fecha, '%d-%m-%Y');
+		IF licencia NOT IN (SELECT numero FROM licencia) THEN
+			CALL ShowError('Licencia no encontrada');
+            LEAVE proc_exit;
+		ELSEIF (SELECT fecha FROM licencia l WHERE l.numero = licencia LIMIT 1) < fecha THEN
+			CALL ShowError('Fecha de anulación debe ser posterior a la fecha de emisión');
+            LEAVE proc_exit;
+        END IF;
+        INSERT INTO anulacion (fecha, licencia, motivo)
+        VALUES (ffecha, licencia, motivo);
+        SELECT * FROM anulacion a WHERE a.licencia = licencia ORDER BY a.numero DESC LIMIT 1; 
+    END //
+delimiter ;
+
+delimiter //
+CREATE PROCEDURE renewLicencia(
+	IN licencia INT,
+    IN fecha VARCHAR(15),
+    IN tipo CHAR(1)
+)
+	proc_exit:BEGIN
+		DECLARE ffecha DATE;
+        DECLARE tipo_ant CHAR(1);
+        SET ffecha = STR_TO_DATE(fecha, '%d-%m-%Y');
+		IF licencia NOT IN (SELECT numero FROM licencia) THEN
+			CALL ShowError('Licencia no encontrada');
+            LEAVE proc_exit;
+		ELSEIF (SELECT fecha FROM licencia l WHERE l.numero = licencia LIMIT 1) < fecha THEN
+			CALL ShowError('Fecha de renovación debe ser posterior a la fecha de emisión');
+            LEAVE proc_exit;
+		ELSEIF (SELECT DATE_ADD(a.fecha, INTERVAL 2 YEAR) FROM anulacion a WHERE a.licencia = licencia ORDER BY a.numero DESC LIMIT 1) > ffecha THEN
+			CALL ShowError('Licencia se encuentra anulada');
+            LEAVE proc_exit;
+        END IF;
+        SET tipo_ant = (SELECT tipo FROM licencia l WHERE l.numero = licencia LIMIT 1);
+        IF tipo = 'A' THEN
+			IF tipo_ant NOT IN ('A', 'B', 'C') THEN
+				CALL ShowError('Licencia no apta para tipo de renovación');
+				LEAVE proc_exit;
+			/*ELSEIF tipo_ant = 'B' THEN
+				IF getAge((SELECT l.cui FROM licencia l WHERE l.numero = licencia LIMIT 1)) < 25 
+                AND IF((licencia NOT IN (SELECT r.licencia FROM renovacion r WHERE r.tipo = tipo_ant)), )
+                THEN
+					
+                END IF;*/
+            END IF;
+        END IF;
+    END //
+delimiter ;
