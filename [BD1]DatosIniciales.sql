@@ -112,4 +112,3 @@ CALL AddLicencia(10801, '12-08-2010', 'C');
 CALL AddLicencia(10116, '01-10-2018', 'M');
 CALL AddLicencia(11901, '08-04-2011', 'M');
 
-SELECT * FROM licencia;

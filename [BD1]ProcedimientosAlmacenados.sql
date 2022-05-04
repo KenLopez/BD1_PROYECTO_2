@@ -20,6 +20,7 @@ DROP FUNCTION IF EXISTS getName;
 DROP FUNCTION IF EXISTS onlyLetters;
 DROP FUNCTION IF EXISTS getAge;
 DROP FUNCTION IF EXISTS generateCUI;
+DROP FUNCTION IF EXISTS dateDiffYears;
 
 CREATE FUNCTION getFullName(solicitado INT)
 RETURNS VARCHAR(120) DETERMINISTIC
@@ -37,6 +38,10 @@ CREATE FUNCTION onlyLetters(str VARCHAR(100))
 RETURNS BOOLEAN DETERMINISTIC
 RETURN IF(str REGEXP '^[a-zA-Záéíóú]*$', true, false);
 
+CREATE FUNCTION dateDiffYears(inicio DATE, fin DATE)
+RETURNS INT DETERMINISTIC
+RETURN YEAR(fin) - YEAR(inicio) - (DATE_FORMAT(fin, '%m%d') < DATE_FORMAT(inicio, '%m%d'));
+
 delimiter //
 CREATE FUNCTION generateCUI(codigo INT)
 RETURNS INT DETERMINISTIC
@@ -53,7 +58,7 @@ RETURNS INT DETERMINISTIC
 	BEGIN
 		DECLARE nac DATE;
         SET nac = (SELECT fecha FROM nacimiento WHERE cui = solicitado LIMIT 1);
-        RETURN YEAR(actual) - YEAR(nac) - (DATE_FORMAT(actual, '%m%d') < DATE_FORMAT(nac, '%m%d'));
+        RETURN dateDiffYears(nac, actual);
     END //
 delimiter ;
 
@@ -465,16 +470,22 @@ CREATE PROCEDURE anularLicencia(
 )
 	proc_exit:BEGIN
 		DECLARE ffecha DATE;
+        DECLARE vencimiento DATE;
+        DECLARE prev_null DATE;
         SET ffecha = STR_TO_DATE(fecha, '%d-%m-%Y');
+        SET vencimiento = DATE_ADD(ffecha, INTERVAL 2 YEAR);
+        SET prev_null = (SELECT a.vencimiento FROM anulacion a WHERE a.licencia = licencia ORDER BY a.numero DESC LIMIT 1);
 		IF licencia NOT IN (SELECT numero FROM licencia) THEN
 			CALL ShowError('Licencia no encontrada');
             LEAVE proc_exit;
 		ELSEIF (SELECT fecha FROM licencia l WHERE l.numero = licencia LIMIT 1) < fecha THEN
 			CALL ShowError('Fecha de anulación debe ser posterior a la fecha de emisión');
             LEAVE proc_exit;
+		ELSEIF prev_null IS NOT NULL AND prev_null >= ffecha THEN
+			SET vencimiento = DATE_ADD(vencimiento, INTERVAL 2 YEAR);
         END IF;
-        INSERT INTO anulacion (fecha, licencia, motivo)
-        VALUES (ffecha, licencia, motivo);
+        INSERT INTO anulacion (fecha, licencia, motivo, vencimiento)
+        VALUES (ffecha, licencia, motivo, vencimiento);
         SELECT * FROM anulacion a WHERE a.licencia = licencia ORDER BY a.numero DESC LIMIT 1; 
     END //
 delimiter ;
@@ -488,6 +499,8 @@ CREATE PROCEDURE renewLicencia(
 	proc_exit:BEGIN
 		DECLARE ffecha DATE;
         DECLARE tipo_ant CHAR(1);
+        DECLARE fecha_emision DATE;
+        DECLARE prev_vencimiento DATE;
         SET ffecha = STR_TO_DATE(fecha, '%d-%m-%Y');
 		IF licencia NOT IN (SELECT numero FROM licencia) THEN
 			CALL ShowError('Licencia no encontrada');
@@ -495,22 +508,56 @@ CREATE PROCEDURE renewLicencia(
 		ELSEIF (SELECT fecha FROM licencia l WHERE l.numero = licencia LIMIT 1) < fecha THEN
 			CALL ShowError('Fecha de renovación debe ser posterior a la fecha de emisión');
             LEAVE proc_exit;
-		ELSEIF (SELECT DATE_ADD(a.fecha, INTERVAL 2 YEAR) FROM anulacion a WHERE a.licencia = licencia ORDER BY a.numero DESC LIMIT 1) > ffecha THEN
+		ELSEIF (SELECT a.vencimiento FROM anulacion a WHERE a.licencia = licencia ORDER BY a.numero DESC LIMIT 1) >= ffecha THEN
 			CALL ShowError('Licencia se encuentra anulada');
             LEAVE proc_exit;
         END IF;
-        SET tipo_ant = (SELECT tipo FROM licencia l WHERE l.numero = licencia LIMIT 1);
+        SET tipo_ant = (SELECT l.tipo FROM licencia l WHERE l.numero = licencia LIMIT 1);
+        SET fecha_emision = (SELECT l.fecha FROM licencia l WHERE l.numero = licencia LIMIT 1);
         IF tipo = 'A' THEN
 			IF tipo_ant NOT IN ('A', 'B', 'C') THEN
 				CALL ShowError('Licencia no apta para tipo de renovación');
 				LEAVE proc_exit;
-			/*ELSEIF tipo_ant = 'B' THEN
-				IF getAge((SELECT l.cui FROM licencia l WHERE l.numero = licencia LIMIT 1)) < 25 
-                AND IF((licencia NOT IN (SELECT r.licencia FROM renovacion r WHERE r.tipo = tipo_ant)), )
-                THEN
-					
-                END IF;*/
+			ELSEIF tipo_ant IN ('B', 'C') THEN
+				IF getAge((SELECT l.cui FROM licencia l WHERE l.numero = licencia LIMIT 1), ffecha) < 25 THEN
+					CALL ShowError('Licencia no apta para menores de 25 años');
+					LEAVE proc_exit;
+                ELSEIF(dateDiffYears(fecha_emision, ffecha)<3) THEN
+					CALL ShowError('Se debe haber tenido licencia tipo B o C por más de 3 años');
+					LEAVE proc_exit;
+                END IF;
             END IF;
+		ELSEIF tipo = 'B' THEN
+			IF tipo_ant NOT IN ('A', 'B', 'C') THEN
+				CALL ShowError('Licencia no apta para tipo de renovación');
+				LEAVE proc_exit;
+			ELSEIF tipo_ant = 'C' THEN
+				IF getAge((SELECT l.cui FROM licencia l WHERE l.numero = licencia LIMIT 1), ffecha) < 23 THEN
+					CALL ShowError('Licencia no apta para menores de 23 años');
+					LEAVE proc_exit;
+                ELSEIF(dateDiffYears(fecha_emision, ffecha)<2) THEN
+					CALL ShowError('Se debe haber tenido licencia tipo C por más de 2 años');
+					LEAVE proc_exit;
+                END IF;
+            END IF;
+		ELSEIF tipo = 'C' AND tipo_ant NOT IN ('A','B','C') THEN
+			CALL ShowError('Licencia no apta para tipo de renovación');
+			LEAVE proc_exit;
+		ELSEIF tipo IN ('M','E') AND tipo_ant <> tipo THEN
+			CALL ShowError('Licencia no apta para tipo de renovación');
+			LEAVE proc_exit;
         END IF;
+        SET prev_vencimiento = (SELECT l.vencimiento FROM licencia l WHERE l.numero = licencia LIMIT 1);
+        UPDATE licencia l SET 
+			l.vencimiento = IF(
+				ffecha > prev_vencimiento, 
+                DATE_ADD(l.vencimiento, INTERVAL 1 YEAR), 
+                DATE_ADD(prev_vencimiento, INTERVAL 1 YEAR)
+			),  
+			l.tipo = tipo
+		WHERE l.numero = licencia;
+        INSERT INTO RENOVACION (fecha, tipo, licencia)
+        VALUES (ffecha, tipo, licencia);
+        SELECT * FROM renovacion r WHERE r.licencia = licencia ORDER BY r.numero DESC LIMIT 1;
     END //
 delimiter ;
