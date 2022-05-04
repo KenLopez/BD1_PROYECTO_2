@@ -501,6 +501,7 @@ CREATE PROCEDURE renewLicencia(
         DECLARE tipo_ant CHAR(1);
         DECLARE fecha_emision DATE;
         DECLARE prev_vencimiento DATE;
+        DECLARE n_vencimiento DATE;
         SET ffecha = STR_TO_DATE(fecha, '%d-%m-%Y');
 		IF licencia NOT IN (SELECT numero FROM licencia) THEN
 			CALL ShowError('Licencia no encontrada');
@@ -548,16 +549,17 @@ CREATE PROCEDURE renewLicencia(
 			LEAVE proc_exit;
         END IF;
         SET prev_vencimiento = (SELECT l.vencimiento FROM licencia l WHERE l.numero = licencia LIMIT 1);
-        UPDATE licencia l SET 
-			l.vencimiento = IF(
+        SET n_vencimiento = IF(
 				ffecha > prev_vencimiento, 
                 DATE_ADD(l.vencimiento, INTERVAL 1 YEAR), 
                 DATE_ADD(prev_vencimiento, INTERVAL 1 YEAR)
-			),  
+			);
+        UPDATE licencia l SET 
+			l.vencimiento = n_vencimiento,  
 			l.tipo = tipo
 		WHERE l.numero = licencia;
-        INSERT INTO RENOVACION (fecha, tipo, licencia)
-        VALUES (ffecha, tipo, licencia);
+        INSERT INTO RENOVACION (fecha, tipo, licencia, vencimiento)
+        VALUES (ffecha, tipo, licencia, n_vencimiento);
         SELECT * FROM renovacion r WHERE r.licencia = licencia ORDER BY r.numero DESC LIMIT 1;
     END //
 delimiter ;
